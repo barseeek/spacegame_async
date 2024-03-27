@@ -6,6 +6,8 @@ import random
 import time
 
 from curses_tools import draw_frame, get_frame_size, read_controls
+from explosion import explode
+from obstacles import Obstacle, show_obstacles
 from physics import update_speed
 
 
@@ -14,6 +16,8 @@ STARS_COUNT = 100
 STAR_SYMBOLS = '+*.:'
 SPEED = 0
 BORDER_SIZE = 1
+obstacles = []
+obstacles_in_last_collisions = []
 
 
 async def fire(canvas,
@@ -43,6 +47,10 @@ async def fire(canvas,
   curses.beep()
   
   while 0 < row < max_row and 0 < column < max_column:
+    for obstacle in obstacles:
+      if obstacle.has_collision(row, column):
+        obstacles_in_last_collisions.append(obstacle)
+        await explode(canvas, obstacle.row, obstacle.column)
     canvas.addstr(round(row), round(column), symbol)
     await asyncio.sleep(0)
     canvas.addstr(round(row), round(column), ' ')
@@ -59,7 +67,7 @@ async def animate_spaceship(canvas, coroutines, start_row, start_column, frames)
       rows, columns = get_frame_size(frame)
       rows_direction, columns_direction, space_pressed = read_controls(canvas)
       if space_pressed:
-        shot_column = column + columns / 2
+        shot_column = column + columns // 2
         shot = fire(canvas, row, shot_column)
         coroutines.append(shot)
       row_speed, column_speed = update_speed(row_speed, column_speed, rows_direction, columns_direction)
@@ -70,13 +78,24 @@ async def animate_spaceship(canvas, coroutines, start_row, start_column, frames)
       new_column = min(max(new_column, BORDER_SIZE),
                        max_column - columns - BORDER_SIZE)
       row, column = new_row, new_column
+      for obstacle in obstacles:
+        if obstacle.has_collision(row, column):
+           return coroutines.append(show_game_over(canvas))
       draw_frame(canvas, row, column, frame)
       await do_ticking(0.1)
       draw_frame(canvas, row, column, frame, negative=True)
 
 
-
-
+async def show_game_over(canvas):
+  frame = read_frame('animations/game_over.txt')
+  canvas.refresh()
+  max_row, max_column = canvas.getmaxyx()
+  rows_frame, columns_frame = get_frame_size(frame)
+  row = max_row // 2 - rows_frame // 2
+  column = max_column // 2 - columns_frame//2
+  while True:
+    draw_frame(canvas, row, column, frame)
+    await do_ticking(0.1)
 
 async def do_ticking(seconds):
   tick_counter = int(10 * seconds)
@@ -128,12 +147,17 @@ async def fly_garbage(canvas, column, garbage_frame, speed=0.5):
   column = min(column, columns_number - 1)
 
   row = 0
-
-  while row < rows_number:
+  rows_frame, columns_frame = get_frame_size(garbage_frame)
+  obstacle = Obstacle(row, column, rows_frame, columns_frame)
+  obstacles.append(obstacle)
+  while row < rows_number and obstacle not in obstacles_in_last_collisions:
       draw_frame(canvas, row, column, garbage_frame)
+      draw_frame(canvas, 0, 0, str(len(obstacles)))
       await asyncio.sleep(0)
       draw_frame(canvas, row, column, garbage_frame, negative=True)
       row += speed
+      obstacle.row = row
+  obstacles.remove(obstacle)
 
 
 async def fill_orbit_with_garbage(canvas, coroutines, frames):
@@ -165,6 +189,7 @@ def draw(canvas):
   garbage = fill_orbit_with_garbage(canvas, coroutines, garbage_frames)
   coroutines.append(spaceship)
   coroutines.append(garbage)
+  coroutines.append(show_obstacles(canvas, obstacles))
   while True:
     for coroutine in coroutines.copy():
       try:
